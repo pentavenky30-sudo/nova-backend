@@ -8,13 +8,18 @@ app.use(express.json());
 
 const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-// Direct universal fallback route to fix the 405 desktop app error
-app.post('/', async (req, res) => {
-    const userMessage = req.body.messages?.[req.body.messages.length - 1]?.content || req.body.message || 'Hi';
+// Render Health Check Route - This stops the "Timed Out" error
+app.get('/', (req, res) => {
+    res.status(200).send("NOVA Cloud Engine Status: OPERATIONAL");
+});
+
+// Main Chat Processing Engine
+app.post('/v1/chat/completions', async (req, res) => {
+    const userMessage = req.body.messages?.[req.body.messages.length - 1]?.content || 'Hi';
     const apiKey = process.env.GEMINI_API_KEY || '';
 
     if (!apiKey) {
-        return res.status(401).json({ choices: [{ message: { role: 'assistant', content: "System check: Gemini API key is missing in cloud variables." } }] });
+        return res.status(401).json({ error: { message: "GEMINI_API_KEY is missing in Render settings." } });
     }
 
     for (let attempt = 1; attempt <= 3; attempt++) {
@@ -35,8 +40,13 @@ app.post('/', async (req, res) => {
                 continue;
             }
 
+            if (!response.ok) {
+                const errText = await response.text();
+                return res.status(response.status).json({ error: { message: `Google API Error: ${response.status}` } });
+            }
+
             const data = await response.json();
-            const replyText = data.candidates?.[0]?.content?.parts?.[0]?.text || "System check complete. Connection established.";
+            const replyText = data.candidates?.?.content?.parts?.?.text || "System check complete.";
             
             return res.json({
                 choices: [{ message: { role: 'assistant', content: replyText } }]
@@ -44,20 +54,14 @@ app.post('/', async (req, res) => {
 
         } catch (error) {
             if (attempt === 3) {
-                return res.status(500).json({ choices: [{ message: { role: 'assistant', content: "Gateway connection timeout. Please re-execute script." } }] });
+                return res.status(500).json({ error: { message: "Failed to connect to Google API." } });
             }
             await wait(2000);
         }
     }
 });
 
-// Also keep the completions layout route active for third-party tools
-app.post('/v1/chat/completions', async (req, res) => {
-    // Re-route traffic instantly to our main handler
-    return app._router.handle(req, res);
-});
-
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 NOVA 24/7 Engine standing by on port ${PORT}`);
 });
